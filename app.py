@@ -1,113 +1,101 @@
 import streamlit as st
 import pandas as pd
 import time
-import random
-import re
-from googlesearch import search
 import requests
 from bs4 import BeautifulSoup
+import re
+from googlesearch import search
+import google.generativeai as genai
 
-# --- RECONA STRATEJİK YAPILANDIRMA ---
-st.set_page_config(page_title="RECONA | İstihbarat Merkezi", page_icon="📡", layout="wide")
+# --- RECONA 2.0 STRATEJİK YAPILANDIRMA ---
+st.set_page_config(page_title="RECONA AI | Derin Analiz", page_icon="📡", layout="wide")
 
-# Sade, Modern ve Profesyonel Arayüz Tasarımı
+# --- AI AYARLARI (Buraya kendi API anahtarını yapıştırabilirsin veya yan menüden girebilirsin) ---
+GEMINI_API_KEY = st.sidebar.text_input("Gemini API Anahtarınızı Girin", type="password")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# --- CSS TASARIM ---
 st.markdown("""
     <style>
     .stApp { background-color: #f8fafc; }
-    .main-header { font-size: 2.8rem; font-weight: 900; color: #0f172a; letter-spacing: -1px; margin-bottom: 0px; }
-    .status-tag { padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: #e2e8f0; color: #475569; }
-    .search-box { padding: 40px; border-radius: 24px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.05); }
-    .result-card { padding: 25px; border-radius: 16px; border-left: 8px solid #2563eb; background: #ffffff; margin-top: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .stButton>button { width: 100%; border-radius: 12px; background: #2563eb; color: white; border: none; font-weight: 700; padding: 0.8rem; transition: 0.3s; }
-    .stButton>button:hover { background: #1d4ed8; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.4); }
+    .result-card { padding: 25px; border-radius: 16px; background: white; border-left: 10px solid #2563eb; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    .ai-box { background-color: #f0f7ff; padding: 15px; border-radius: 10px; border: 1px dashed #2563eb; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- MERKEZİ VERİTABANI (CRM) ---
-# Uygulama açık olduğu sürece verileri hafızada tutar.
-if 'recona_db' not in st.session_state:
-    st.session_state.recona_db = pd.DataFrame(columns=["Kayıt Tarihi", "Hedef İsim", "Web Adresi", "E-posta", "Telefon", "Tür", "İstihbarat Notu"])
-
-# --- RECONA KEŞİF AJANI ---
-def recona_scout(target):
-    intel = {"Web": "Bulunamadı", "Email": "Bulunamadı", "Tel": "Bulunamadı"}
+# --- DERİN TARAYICI FONKSİYONU ---
+def deep_scraping(url):
+    data = {"Email": "Bulunamadı", "Tel": "Bulunamadı", "Icerik": ""}
     try:
-        # Google üzerinden dijital ayak izi takibi
-        query = f"{target} resmi web sitesi iletişim"
-        for url in search(query, num_results=1, lang="tr"):
-            intel["Web"] = url
-            break
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, timeout=10, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        text = soup.get_text()
         
-        # İleride buraya web sitesinin içine girip e-posta/tel çeken fonksiyon eklenecek
+        # Email ve Tel yakalama
+        emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', text)
+        phones = re.findall(r'(\+?\d{10,15})', text)
+        
+        if emails: data["Email"] = emails[0]
+        if phones: data["Tel"] = phones[0]
+        data["Icerik"] = text[:2000] # AI analizi için ilk 2000 karakter
     except:
         pass
-    return intel
+    return data
 
-# --- ARAYÜZ ---
-st.markdown('<div class="main-header">RECONA</div>', unsafe_allow_html=True)
-st.markdown('<span class="status-tag">STRATEJİK KEŞİF VE ANALİZ SİSTEMİ</span>', unsafe_allow_html=True)
-st.write("---")
+# --- AI ANALİZ FONKSİYONU ---
+def ai_analiz(firma_adi, site_metni):
+    if not GEMINI_API_KEY: return "AI Anahtarı girilmedi."
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"Şu firma hakkında web sitesinden alınan metni incele: {firma_adi}. \nMetin: {site_metni} \n\nLütfen şunları özetle: 1. Firmanın ana işi ne? 2. Hangi ürünleri satıyor? 3. Sence güvenilir bir iş ortağı mı? (Kısa ve öz olsun)"
+        response = model.generate_content(prompt)
+        return response.text
+    except:
+        return "AI analizi şu an yapılamıyor."
 
-tab_scout, tab_db = st.tabs(["🚀 Yeni Keşif", "📂 İstihbarat Arşivi"])
+# --- ANA ARAYÜZ ---
+if 'recona_db' not in st.session_state:
+    st.session_state.recona_db = pd.DataFrame(columns=["Tarih", "Hedef", "Web", "Email", "Tel", "AI Analizi"])
 
-with tab_scout:
-    st.markdown('<div class="search-box">', unsafe_allow_html=True)
-    col_name, col_type = st.columns([3, 1])
-    
-    with col_name:
-        target_input = st.text_input("Hedef Firma veya Rakip Adı", placeholder="Analiz edilecek unvanı girin...")
-    with col_type:
-        target_type = st.selectbox("Analiz Kategorisi", ["Potansiyel Müşteri", "Rakip İnceleme", "Stratejik Ortak"])
+st.title("📡 RECONA | Derin İstihbarat")
+st.write("Firma ismini yazın, AI ve Derin Tarayıcı gerisini halletsin.")
 
-    if st.button("KEŞİF BAŞLAT"):
-        if target_input:
-            with st.spinner('RECONA ajanları dijital dünyada iz sürüyor...'):
-                # Ajanı çalıştır
-                found_data = recona_scout(target_input)
-                
-                # Veritabanına kaydet
-                new_row = {
-                    "Kayıt Tarihi": time.strftime("%d/%m/%Y"),
-                    "Hedef İsim": target_input,
-                    "Web Adresi": found_data["Web"],
-                    "E-posta": found_data["Email"],
-                    "Telefon": found_data["Tel"],
-                    "Tür": target_type,
-                    "İstihbarat Notu": f"{target_input} hakkında ilk keşif raporu oluşturuldu."
-                }
-                st.session_state.recona_db = pd.concat([st.session_state.recona_db, pd.DataFrame([new_row])], ignore_index=True)
-                
-                # Başarı mesajı ve rapor kartı
-                st.markdown(f"""
-                <div class="result-card">
-                    <h3 style='margin-top:0;'>🔍 Keşif Tamamlandı</h3>
-                    <p><b>Hedef:</b> {target_input}</p>
-                    <p><b>Web Sitesi:</b> <a href="{found_data['Web']}" target="_blank">{found_data['Web']}</a></p>
-                    <p style='color: #2563eb; font-weight:600;'>Bu hedef başarıyla İstihbarat Arşivi'ne eklendi.</p>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.warning("Lütfen araştırılacak bir isim girin.")
-    st.markdown('</div>', unsafe_allow_html=True)
+target = st.text_input("Analiz Edilecek Firma")
 
-with tab_db:
-    st.subheader("🗄️ Toplanan İstihbarat Verileri")
-    if not st.session_state.recona_db.empty:
-        # Arama ve filtreleme
-        search_term = st.text_input("Arşivde Ara...", placeholder="Firma adı yazın...")
-        df_filtered = st.session_state.recona_db
-        if search_term:
-            df_filtered = df_filtered[df_filtered["Hedef İsim"].str.contains(search_term, case=False)]
+if st.button("DERİN KEŞİF BAŞLAT"):
+    if target:
+        with st.spinner('Ajanlar web sitesine sızıyor ve AI rapor hazırlıyor...'):
+            # 1. Web sitesini bul
+            web_url = "Bulunamadı"
+            for url in search(f"{target} resmi web sitesi", num_results=1, lang="tr"):
+                web_url = url
+                break
             
-        st.dataframe(df_filtered, use_container_width=True, hide_index=True)
-        
-        # Excel/CSV olarak indir
-        st.download_button("📂 Arşivi Dışa Aktar", 
-                           df_filtered.to_csv(index=False).encode('utf-8-sig'), 
-                           "recona_istihbarat_arsivi.csv", 
-                           "text/csv")
-    else:
-        st.info("Henüz bir keşif yapılmadı. Arşiv boş.")
+            # 2. Site içine gir ve veri topla
+            scrape_data = {"Email": "N/A", "Tel": "N/A", "Icerik": ""}
+            if web_url != "Bulunamadı":
+                scrape_data = deep_scraping(web_url)
+            
+            # 3. AI ile analiz et
+            analiz_notu = ai_analiz(target, scrape_data["Icerik"])
+            
+            # 4. Kaydet ve Göster
+            new_row = {"Tarih": time.strftime("%d/%m/%Y"), "Hedef": target, "Web": web_url, "Email": scrape_data["Email"], "Tel": scrape_data["Tel"], "AI Analizi": analiz_notu}
+            st.session_state.recona_db = pd.concat([st.session_state.recona_db, pd.DataFrame([new_row])], ignore_index=True)
+            
+            st.markdown(f"""
+            <div class="result-card">
+                <h3>🔍 {target} Raporu</h3>
+                <p><b>🌐 Web:</b> {web_url}</p>
+                <p><b>📧 E-posta:</b> {scrape_data['Email']} | <b>📞 Tel:</b> {scrape_data['Tel']}</p>
+                <div class="ai-box">
+                    <b>🤖 AI Strateji Notu:</b><br>{analiz_notu}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-st.markdown("---")
-st.caption("© 2026 RECONA | Ticari İstihbarat ve Stratejik Analiz Platformu")
+st.write("---")
+st.subheader("📂 İstihbarat Arşivi")
+st.dataframe(st.session_state.recona_db, use_container_width=True)
